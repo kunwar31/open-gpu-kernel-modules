@@ -90,6 +90,7 @@ ifeq ($(TARGET_ARCH),aarch64)
   CFLAGS += -mgeneral-regs-only
   CFLAGS += -march=armv8-a
   CFLAGS += -mstrict-align
+  CFLAGS += -ffixed-x18
   CONDITIONAL_CFLAGS += $(call TEST_CC_ARG, -mno-outline-atomics)
 endif
 
@@ -215,6 +216,7 @@ $(NV_KERNEL_O): $(OBJS) $(EXPORTS_LINK_COMMAND) $(LINKER_SCRIPT)
 	$(call quiet_cmd,OBJCOPY) \
 	  --localize-symbol=memset \
 	  --localize-symbol=memcpy \
+	  --remove-section=.note.gnu.property \
 	  $@
 
 .PHONY: clean

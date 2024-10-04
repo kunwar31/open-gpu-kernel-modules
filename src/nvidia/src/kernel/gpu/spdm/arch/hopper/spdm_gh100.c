@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -31,7 +31,7 @@
 #include "gpu/spdm/spdm.h"
 #include "spdm/rmspdmtransport.h"
 #include "spdm/rmspdmvendordef.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "gpu/gsp/kernel_gsp.h"
 #include "gpu/bus/kern_bus.h"
 #include "gpu/mem_mgr/mem_mgr.h"
@@ -43,6 +43,7 @@
 #include "platform/sli/sli.h"
 #include "nvspdm_rmconfig.h"
 #include "published/hopper/gh100/dev_falcon_v4.h"
+#include "nvmisc.h"
 #include "gpu/conf_compute/conf_compute.h"
 
 /* ------------------------ Macros ----------------------------------------- */
@@ -50,6 +51,14 @@
 // List expected capabilties to receive from Responder.
 // Regardless of whether Requester is configured to support these,
 // we only expect Responder to provide these capabilities.
+//
+
+//
+// TODO: SPDM_CAPABILITIES_FLAGS_GH100 and g_SpdmAlgoCheckTable_GH100 is expected capabilities flags
+//       and attributions what GH100 receive from responder. Currently, we have only 1 responder
+//       and return fixed capabilities flags and attributions.
+//       If we want to support different return capabilitis and attributions afterwards, we need
+//       to refactor spdmCheckConnection_GH100().
 //
 #define SPDM_CAPABILITIES_FLAGS_GH100 \
         SPDM_GET_CAPABILITIES_RESPONSE_FLAGS_CERT_CAP       | \
@@ -64,21 +73,6 @@
         SPDM_GET_CAPABILITIES_RESPONSE_FLAGS_HBEAT_CAP;
 
 /* ------------------------ Static Variables ------------------------------- */
-//
-// For transport functionality, we require access to the GPU and Spdm objects,
-// as well as additional state (temporary response buffer).
-//
-// However, libspdm transport layer is implemented via callbacks which currently
-// do not support passing any custom parameters, meaning we must use static variables
-// to access these objects. If we ever require multiple instances of the Spdm object,
-// this will be an issue.
-//
-static OBJGPU *g_pGpu                = NULL;
-static Spdm   *g_pSpdm               = NULL;
-static NvU8   *g_pTransportBuffer    = NULL;
-static NvU32   g_transportBufferSize = 0;
-static NvU32   g_pendingResponseSize = 0;
-
 static SPDM_ALGO_CHECK_ENTRY g_SpdmAlgoCheckTable_GH100[] =
 {
     { LIBSPDM_DATA_MEASUREMENT_SPEC,       SPDM_MEASUREMENT_SPECIFICATION_DMTF },
@@ -96,7 +90,7 @@ static SPDM_ALGO_CHECK_ENTRY g_SpdmAlgoCheckTable_GH100[] =
 
 /* ------------------------ Static Function Prototypes --------------------- */
 static void _spdmSendHeartbeat(NvU32 gpuInstance, void *pArgs);
-static NV_STATUS _spdmTriggerHeartbeat(OBJGPU *pGpu, OBJTMR *pTmr, PTMR_EVENT pTmrEvent);
+static NV_STATUS _spdmTriggerHeartbeat(OBJGPU *pGpu, OBJTMR *pTmr, TMR_EVENT *pTmrEvent);
 
 //
 // Static transport layer functions which we pass to libspdm as function pointers.
@@ -126,7 +120,6 @@ static libspdm_return_t _spdmSendMessageGsp(void *spdm_context, size_t message_s
 
 static libspdm_return_t _spdmReceiveMessageGsp(void *spdm_context, size_t *message_size,
                                                void **message, uint64_t timeout);
-
 
 /* ------------------------ Static Functions ------------------------------- */
 //
@@ -228,7 +221,7 @@ _spdmTriggerHeartbeat
 (
     OBJGPU     *pGpu,
     OBJTMR     *pTmr,
-    PTMR_EVENT  pTmrEvent
+    TMR_EVENT *pTmrEvent
 )
 {
     NV_STATUS  status = NV_OK;
@@ -243,7 +236,7 @@ _spdmTriggerHeartbeat
     status = osQueueWorkItemWithFlags(pGpu, _spdmSendHeartbeat, pTmrEvent->pUserData,
                                         OS_QUEUE_WORKITEM_FLAGS_DONT_FREE_PARAMS |
                                         OS_QUEUE_WORKITEM_FLAGS_LOCK_API_RW      |
-                                        OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RW);
+                                        OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS);
 
     ErrorExit:
     if (status != NV_OK && pGpu != NULL)
@@ -311,6 +304,8 @@ _spdmEncodeMessageGsp
     void                                *pSecuredMessageContext = NULL;
     NV_SPDM_DESC_HEADER                 *pNvSpdmDescHdr         = NULL;
     NvU32                                payloadSize            = 0;
+    Spdm                                *pSpdm                  = NULL;
+    size_t                               dataSize               = sizeof(void *);
 
     // Check libspdm parameters.
     if (spdm_context == NULL || message == NULL || message_size == 0 ||
@@ -330,6 +325,21 @@ _spdmEncodeMessageGsp
     if (*transport_message_size < (sizeof(NV_SPDM_DESC_HEADER) + message_size))
     {
         return LIBSPDM_STATUS_INVALID_MSG_FIELD;
+    }
+
+    status = libspdm_get_data(spdm_context, LIBSPDM_DATA_APP_CONTEXT_DATA,
+                              NULL, (void *)&pSpdm, &dataSize);
+
+    if (status != LIBSPDM_STATUS_SUCCESS)
+    {
+        NV_PRINTF(LEVEL_ERROR, ", spdmStatus != LIBSPDM_STATUS_SUCCESS \n ");
+        return status;
+    }
+
+    if (pSpdm == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, " pSpdm == NULL, SPDM context probably corrupted !! \n ");
+        return LIBSPDM_STATUS_INVALID_STATE_LOCAL;
     }
 
     // Initialize descriptor header.
@@ -401,7 +411,7 @@ _spdmEncodeMessageGsp
     }
 
     // Check final encrypted message size.
-    if (*transport_message_size > g_pSpdm->payloadBufferSize)
+    if (*transport_message_size > pSpdm->payloadBufferSize)
     {
         return LIBSPDM_STATUS_BUFFER_TOO_SMALL;
     }
@@ -432,6 +442,8 @@ _spdmDecodeMessageGsp
     void                                  *pSecuredMessageContext = NULL;
     libspdm_return_t                       status                 = LIBSPDM_STATUS_SUCCESS;
     spdm_secured_message_a_data_header1_t *pSpdmSecuredMsgHdr     = NULL;
+    Spdm                                  *pSpdm                  = NULL;
+    size_t                                 dataSize               = sizeof(void *);
 
     // Check libspdm parameters.
     if (spdm_context == NULL || session_id == NULL || is_app_message == NULL ||
@@ -447,10 +459,25 @@ _spdmDecodeMessageGsp
         return LIBSPDM_STATUS_INVALID_PARAMETER;
     }
 
+    status = libspdm_get_data(spdm_context, LIBSPDM_DATA_APP_CONTEXT_DATA,
+                              NULL, (void *)&pSpdm, &dataSize);
+
+    if (status != LIBSPDM_STATUS_SUCCESS)
+    {
+        NV_PRINTF(LEVEL_ERROR, " spdmStatus != LIBSPDM_STATUS_SUCCESS \n ");
+        return status;
+    }
+
+    if (pSpdm == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, " pSpdm == NULL, SPDM context probably corrupted !! \n ");
+        return LIBSPDM_STATUS_INVALID_STATE_LOCAL;
+    }
+
     // Retrieve NV-header from message, and perform basic validation.
     pNvSpdmDescHdr = (NV_SPDM_DESC_HEADER *)transport_message;
     if (transport_message_size < sizeof(NV_SPDM_DESC_HEADER) ||
-        transport_message_size > g_pSpdm->payloadBufferSize)
+        transport_message_size > pSpdm->payloadBufferSize)
     {
         return LIBSPDM_STATUS_INVALID_MSG_FIELD;
     }
@@ -566,11 +593,11 @@ _spdmSendMessageGsp
     uint64_t    timeout
 )
 {
-    NV_STATUS        nvStatus   = NV_OK;
-    libspdm_return_t spdmStatus = LIBSPDM_STATUS_SUCCESS;
-
-    // Ensure size is cleared to indicate no response pending in buffer yet
-    g_pendingResponseSize = 0;
+    NV_STATUS                   nvStatus   = NV_OK;
+    libspdm_return_t            spdmStatus = LIBSPDM_STATUS_SUCCESS;
+    Spdm                       *pSpdm      = NULL;
+    OBJGPU                     *pGpu       = NULL;
+    size_t                      dataSize   = sizeof(void *);
 
     // Check libspdm parameters.
     if (message_size == 0 || message == NULL)
@@ -578,23 +605,44 @@ _spdmSendMessageGsp
         return LIBSPDM_STATUS_INVALID_PARAMETER;
     }
 
-    if (g_pGpu == NULL || g_pSpdm == NULL)
+    spdmStatus = libspdm_get_data(spdm_context, LIBSPDM_DATA_APP_CONTEXT_DATA,
+                              NULL, (void *)&pSpdm, &dataSize);
+
+    if (spdmStatus != LIBSPDM_STATUS_SUCCESS)
     {
+        NV_PRINTF(LEVEL_ERROR,"  spdmStatus != LIBSPDM_STATUS_SUCCESS \n ");
+        return spdmStatus;
+    }
+
+    if (pSpdm == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, " pSpdm == NULL, SPDM context probably corrupted !! \n ");
         return LIBSPDM_STATUS_INVALID_STATE_LOCAL;
     }
 
-    if (g_transportBufferSize < message_size)
+    pGpu = ENG_GET_GPU(pSpdm);
+
+    if (pGpu == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, " pGpu == NULL, SPDM context probably corrupted !! \n ");
+        return LIBSPDM_STATUS_INVALID_STATE_LOCAL;
+    }
+
+    // Ensure size is cleared to indicate no response pending in buffer yet
+    pSpdm->pendingResponseSize = 0;
+
+    if (pSpdm->transportBufferSize < message_size)
     {
         return LIBSPDM_STATUS_BUFFER_TOO_SMALL;
     }
 
     // Fill transport buffer with message and send
-    g_pendingResponseSize = g_transportBufferSize;
-    portMemCopy(g_pTransportBuffer, g_transportBufferSize, message, message_size);
+    pSpdm->pendingResponseSize = pSpdm->transportBufferSize;
+    portMemCopy(pSpdm->pTransportBuffer, pSpdm->transportBufferSize, message, message_size);
 
-    nvStatus = spdmMessageProcess_HAL(g_pGpu, g_pSpdm,
-                                      g_pTransportBuffer, message_size,
-                                      g_pTransportBuffer, &g_pendingResponseSize);
+    nvStatus = spdmMessageProcess_HAL(pGpu, pSpdm,
+                                      pSpdm->pTransportBuffer, message_size,
+                                      pSpdm->pTransportBuffer, &pSpdm->pendingResponseSize);
     if (nvStatus != NV_OK)
     {
         spdmStatus = LIBSPDM_STATUS_SEND_FAIL;
@@ -603,7 +651,7 @@ _spdmSendMessageGsp
     if (spdmStatus != LIBSPDM_STATUS_SUCCESS)
     {
         // If message failed, size is cleared to indicate no response pending
-        g_pendingResponseSize = 0;
+        pSpdm->pendingResponseSize = 0;
     }
 
     return spdmStatus;
@@ -623,7 +671,9 @@ _spdmReceiveMessageGsp
     uint64_t   timeout
 )
 {
-    libspdm_return_t spdmStatus = LIBSPDM_STATUS_SUCCESS;
+    libspdm_return_t   spdmStatus = LIBSPDM_STATUS_SUCCESS;
+    Spdm              *pSpdm      = NULL;
+    size_t             dataSize   = sizeof(void *);
 
     // Check libspdm parameters.
     if (message_size == NULL || message == NULL || *message == NULL)
@@ -631,25 +681,36 @@ _spdmReceiveMessageGsp
         return LIBSPDM_STATUS_INVALID_PARAMETER;
     }
 
-    if (g_pGpu == NULL || g_pSpdm == NULL)
+    spdmStatus = libspdm_get_data(spdm_context, LIBSPDM_DATA_APP_CONTEXT_DATA,
+                              NULL, (void *)&pSpdm, &dataSize);
+
+    if (spdmStatus != LIBSPDM_STATUS_SUCCESS)
     {
-        return LIBSPDM_STATUS_INVALID_STATE_LOCAL;
+        NV_PRINTF(LEVEL_ERROR, " spdmStatus != LIBSPDM_STATUS_SUCCESS \n ");
+        return spdmStatus;
     }
 
+    if (pSpdm == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, " pSpdm  == NULL, SPDM context probably corrupted !! \n ");
+        return LIBSPDM_STATUS_INVALID_STATE_LOCAL;
+    }
     // Basic validation to ensure we have a real response.
-    if (g_pendingResponseSize == 0 || g_pendingResponseSize > *message_size)
+    if (pSpdm->pendingResponseSize == 0 ||
+        pSpdm->pendingResponseSize > *message_size)
     {
         spdmStatus = LIBSPDM_STATUS_RECEIVE_FAIL;
         goto ErrorExit;
     }
 
-    portMemCopy(*message, *message_size, g_pTransportBuffer, g_pendingResponseSize);
-    *message_size = g_pendingResponseSize;
+    portMemCopy(*message, *message_size,
+                pSpdm->pTransportBuffer, pSpdm->pendingResponseSize);
+    *message_size = pSpdm->pendingResponseSize;
 
 ErrorExit:
 
     // Ensure size is cleared to indicate no response pending in buffer
-    g_pendingResponseSize = 0;
+    pSpdm->pendingResponseSize = 0;
 
     return spdmStatus;
 }
@@ -673,18 +734,14 @@ spdmDeviceInit_GH100
         return NV_ERR_INVALID_ARGUMENT;
     }
 
-    g_pGpu                = pGpu;
-    g_pSpdm               = pSpdm;
-    g_pendingResponseSize = 0;
-    g_pTransportBuffer    = portMemAllocNonPaged(pSpdm->payloadBufferSize);
-
-    if (g_pTransportBuffer == NULL)
+    pSpdm->pendingResponseSize = 0;
+    pSpdm->pTransportBuffer    = portMemAllocNonPaged(pSpdm->payloadBufferSize);
+    if (pSpdm->pTransportBuffer == NULL)
     {
-        g_transportBufferSize = 0;
+        pSpdm->transportBufferSize = 0;
         return NV_ERR_NO_MEMORY;
     }
-
-    g_transportBufferSize = pSpdm->payloadBufferSize;
+    pSpdm->transportBufferSize = pSpdm->payloadBufferSize;
 
     // Register transport layer functionality with library.
     libspdm_register_transport_layer_func(pSpdm->pLibspdmContext,
@@ -703,7 +760,6 @@ spdmDeviceInit_GH100
     return NV_OK;
 }
 
-
 /*!
  * To deinitialize the GSP SPDM Responder, we need to release the surface for
  * SPDM communication. GSP-RM will handle the rest.
@@ -717,10 +773,10 @@ spdmDeviceDeinit_GH100
 )
 {
     // Just-in-case, portMemFree handles NULL.
-    portMemFree(g_pTransportBuffer);
-    g_pTransportBuffer    = NULL;
-    g_transportBufferSize = 0;
-    g_pendingResponseSize = 0;
+    portMemFree(pSpdm->pTransportBuffer);
+    pSpdm->pTransportBuffer     = NULL;
+    pSpdm->transportBufferSize  = 0;
+    pSpdm->pendingResponseSize  = 0;
 
     return NV_OK;
 }
@@ -974,7 +1030,7 @@ spdmCheckConnection_GH100
     }
 
     // Check all crypto algorithms match expected.
-    algoCheckCount = sizeof(g_SpdmAlgoCheckTable_GH100)/sizeof(SPDM_ALGO_CHECK_ENTRY);
+    algoCheckCount = NV_ARRAY_ELEMENTS(g_SpdmAlgoCheckTable_GH100);
 
     for (i = 0; i < algoCheckCount; i++)
     {
@@ -1313,7 +1369,6 @@ spdmUnregisterFromHeartbeats_GH100
 
 ErrorExit:
     // In any case, cancel any further heartbeats that might occur. Handles NULL gracefully.
-    tmrEventCancel(pTmr, pSpdm->pHeartbeatEvent);
     tmrEventDestroy(pTmr, pSpdm->pHeartbeatEvent);
     pSpdm->pHeartbeatEvent    = NULL;
     pSpdm->heartbeatPeriodSec = 0;

@@ -46,6 +46,7 @@
 //
 #include "gpu/spdm/libspdm_includes.h"
 
+
 /* ------------------------ Static Function Prototypes --------------------- */
 static void _spdmClearContext(Spdm *pSpdm);
 libspdm_return_t _spdmAcquireTransportBuffer(void *context, void **msg_buf_ptr);
@@ -301,6 +302,12 @@ spdmContextInit_IMPL
         return NV_ERR_INVALID_ARGUMENT;
     }
 
+    if (!libspdm_check_crypto_backend())
+    {
+        NV_PRINTF(LEVEL_ERROR, "SPDM cannot boot without proper crypto backend!\n");
+        return NV_ERR_INVALID_STATE;
+    }
+
     // Allocate and initialize all required memory for context and certificates.
     pSpdm->libspdmContextSize = libspdm_get_context_size();
     pSpdm->pLibspdmContext    = portMemAllocNonPaged(pSpdm->libspdmContextSize);
@@ -432,6 +439,11 @@ spdmContextInit_IMPL
 
     libspdm_init_msg_log(pSpdm->pLibspdmContext, pSpdm->pMsgLog, pSpdm->msgLogMaxSize);
 
+
+    // Store SPDM object pointer to libspdm context
+    CHECK_SPDM_STATUS(libspdm_set_data(pSpdm->pLibspdmContext, LIBSPDM_DATA_APP_CONTEXT_DATA,
+                                       NULL, (void *)&pSpdm, sizeof(void *)));
+
     //
     // Perform any device-specific initialization. spdmDeviceInit is also
     // responsible for registering transport layer functions with libspdm.
@@ -472,6 +484,14 @@ spdmContextInit_IMPL
 
     // Initialize session message count to zero.
     pSpdm->sessionMsgCount = 0;
+
+    // Libspdm provides basic functionality to check the context
+    if (!libspdm_check_context(pSpdm->pLibspdmContext))
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed libspdm context selftest!\n");
+        status = NV_ERR_INVALID_STATE;
+        goto ErrorExit;
+    }
 
 ErrorExit:
 

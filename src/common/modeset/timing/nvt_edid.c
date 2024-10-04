@@ -1056,7 +1056,10 @@ NVT_STATUS NV_STDCALL NvTiming_ParseEDIDInfo(NvU8 *pEdid, NvU32 length, NVT_EDID
                 parseCta861VsvdbBlocks(p861Info, pInfo, FROM_CTA861_EXTENSION);
 
                 // parse HDR related information from the HDR static metadata data block
-                parseCea861HdrStaticMetadataDataBlock(p861Info, pInfo, FROM_CTA861_EXTENSION);
+                if (p861Info->valid.hdr_static_metadata != 0)
+                {
+                    parseCta861HdrStaticMetadataDataBlock(p861Info, pInfo, FROM_CTA861_EXTENSION);
+                }
 
                 // Timings are listed (or shall) be listed in priority order
                 // So read SVD, yuv420 SVDs first before reading detailed timings
@@ -2388,7 +2391,8 @@ NvU32 NvTiming_EDIDStrongValidationMask(NvU8 *pEdid, NvU32 length)
 
                     if (parseCta861DataBlockInfo(pData_collection, (NvU32)ctaDTD_Offset - 4, NULL) == NVT_STATUS_SUCCESS)
                     {
-                        pData_collection++;
+                        pData_collection++; // go to the next byte. skip Tag+Length byte
+
                         if (ctaBlockTag == NVT_CEA861_TAG_VIDEO)
                         {
                             for (i=0; i < ctaPayload; i++)
@@ -2432,6 +2436,8 @@ NvU32 NvTiming_EDIDStrongValidationMask(NvU8 *pEdid, NvU32 length)
                     }
                     else
                     {
+                        pData_collection++; // go to the next byte. skip Tag+Length byte
+
                         ret |= NVT_EDID_VALIDATION_ERR_MASK(NVT_EDID_VALIDATION_ERR_EXT_CTA_INVALID_DATA_BLOCK);
                         pData_collection += ctaPayload;
                     }
