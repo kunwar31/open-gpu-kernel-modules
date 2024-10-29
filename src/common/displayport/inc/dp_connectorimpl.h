@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -102,9 +102,9 @@ namespace DisplayPort
         NvU8     cachedSourceChipRevision;
         bool     bOuiCached;
 
-        unsigned ouiId;                                             // Sink ouiId
-        char modelName[NV_DPCD_SOURCE_DEV_ID_STRING__SIZE + 1];     // Device Model-name
-        bool    bIgnoreSrcOuiHandshake;                             // Skip writing source OUI
+        unsigned ouiId;                                              // Sink ouiId
+        unsigned char modelName[NV_DPCD_SOURCE_DEV_ID_STRING__SIZE + 1];  // Device Model-name
+        bool    bIgnoreSrcOuiHandshake;                              // Skip writing source OUI
 
         LinkPolicy    linkPolicy;
 
@@ -313,6 +313,7 @@ namespace DisplayPort
         bool        bDisableSSC;
         bool        bEnableFastLT;
         NvU32       maxLinkRateFromRegkey;
+        bool        bFlushTimeslotWhenDirty;
 
         //
         // Latency(ms) to apply between link-train and FEC enable for bug
@@ -360,6 +361,7 @@ namespace DisplayPort
         // the stale messages from previous discovery.
         //
         bool        bForceClearPendingMsg;
+        bool        bSkipFakeDeviceDpcdAccess;
 
 
         Group *perHeadAttachedGroup[NV_MAX_HEADS];
@@ -622,7 +624,7 @@ namespace DisplayPort
         void freeTimeslice(GroupImpl * targetGroup);
         void flushTimeslotsToHardware();
         bool getHDCPAbortCodesDP12(NvU32 &hdcpAbortCodesDP12);
-        bool getOuiSink(unsigned &ouiId, char * modelName, size_t modelNameBufferSize, NvU8 & chipRevision);
+        bool getOuiSink(unsigned &ouiId, unsigned char * modelName, size_t modelNameBufferSize, NvU8 & chipRevision);
         bool hdcpValidateKsv(const NvU8 *ksv, NvU32 Size);
         void cancelHdcpCallbacks();
         bool handleCPIRQ();

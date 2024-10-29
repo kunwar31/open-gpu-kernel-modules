@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 200-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2004-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -448,9 +448,13 @@
 // Cavium, Inc. CN99xx [ThunderX2]  [177d:af00]
 #define CAVIUM_X2_DEVID                     0xAF00
 
-// Lenovo Tomcat Workstation
+// Lenovo Tomcat/Falcon/Hornet Workstations
 #define LENOVO_TOMCAT_DEVID                 0x1B81
 #define LENOVO_TOMCAT_SSDEVID               0x104e
+#define LENOVO_FALCON_DEVID                 0x7A8A
+#define LENOVO_FALCON_SSDEVID               0x1055
+#define LENOVO_HORNET_DEVID                 0x7A8A
+#define LENOVO_HORNET_SSDEVID               0x1056
 
 // NVIDIA C51
 #define NVIDIA_C51_DEVICE_ID_MIN                        0x2F0
@@ -628,6 +632,7 @@ enum {
 ,     CS_INTEL_1B81
 ,     CS_INTEL_18DC
 ,     CS_INTEL_7A04
+,     CS_INTEL_5795
 ,     CS_SIFIVE_FU740_C000
 ,     CS_PLDA_XPRESSRICH_AXI_REF
 ,     CS_AMPERE_AMPEREONE

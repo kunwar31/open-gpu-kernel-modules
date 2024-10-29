@@ -235,8 +235,11 @@ struct KernelNvlink {
     NvBool (*__knvlinkIsPresent__)(struct OBJGPU *, struct KernelNvlink *);
     NV_STATUS (*__knvlinkSetUniqueFabricBaseAddress__)(struct OBJGPU *, struct KernelNvlink *, NvU64);
     void (*__knvlinkClearUniqueFabricBaseAddress__)(struct OBJGPU *, struct KernelNvlink *);
+    NV_STATUS (*__knvlinkSetUniqueFabricEgmBaseAddress__)(struct OBJGPU *, struct KernelNvlink *, NvU64);
+    void (*__knvlinkClearUniqueFabricEgmBaseAddress__)(struct OBJGPU *, struct KernelNvlink *);
     NV_STATUS (*__knvlinkHandleFaultUpInterrupt__)(struct OBJGPU *, struct KernelNvlink *, NvU32);
     NV_STATUS (*__knvlinkValidateFabricBaseAddress__)(struct OBJGPU *, struct KernelNvlink *, NvU64);
+    NV_STATUS (*__knvlinkValidateFabricEgmBaseAddress__)(struct OBJGPU *, struct KernelNvlink *, NvU64);
     NvU32 (*__knvlinkGetConnectedLinksMask__)(struct OBJGPU *, struct KernelNvlink *);
     NV_STATUS (*__knvlinkEnableLinksPostTopology__)(struct OBJGPU *, struct KernelNvlink *, NvU32);
     NV_STATUS (*__knvlinkOverrideConfig__)(struct OBJGPU *, struct KernelNvlink *, NvU32);
@@ -324,12 +327,14 @@ struct KernelNvlink {
     NvBool PRIVATE_FIELD(bEnableSafeModeAtLoad);
     NvBool PRIVATE_FIELD(bEnableAli);
     NvBool PRIVATE_FIELD(bFloorSwept);
+    NvU32 PRIVATE_FIELD(numPortEvents);
     NvBool PRIVATE_FIELD(bLinkTrainingDebugSpew);
     NvBool PRIVATE_FIELD(bDisableL2Mode);
     NvU32 PRIVATE_FIELD(nvlinkLinkSpeed);
     NvU32 PRIVATE_FIELD(errorRecoveries)[18];
     NvBool PRIVATE_FIELD(bNvswitchProxy);
     NvU64 PRIVATE_FIELD(fabricBaseAddr);
+    NvU64 PRIVATE_FIELD(fabricEgmBaseAddr);
 };
 
 struct KernelNvlink_PRIVATE {
@@ -347,8 +352,11 @@ struct KernelNvlink_PRIVATE {
     NvBool (*__knvlinkIsPresent__)(struct OBJGPU *, struct KernelNvlink *);
     NV_STATUS (*__knvlinkSetUniqueFabricBaseAddress__)(struct OBJGPU *, struct KernelNvlink *, NvU64);
     void (*__knvlinkClearUniqueFabricBaseAddress__)(struct OBJGPU *, struct KernelNvlink *);
+    NV_STATUS (*__knvlinkSetUniqueFabricEgmBaseAddress__)(struct OBJGPU *, struct KernelNvlink *, NvU64);
+    void (*__knvlinkClearUniqueFabricEgmBaseAddress__)(struct OBJGPU *, struct KernelNvlink *);
     NV_STATUS (*__knvlinkHandleFaultUpInterrupt__)(struct OBJGPU *, struct KernelNvlink *, NvU32);
     NV_STATUS (*__knvlinkValidateFabricBaseAddress__)(struct OBJGPU *, struct KernelNvlink *, NvU64);
+    NV_STATUS (*__knvlinkValidateFabricEgmBaseAddress__)(struct OBJGPU *, struct KernelNvlink *, NvU64);
     NvU32 (*__knvlinkGetConnectedLinksMask__)(struct OBJGPU *, struct KernelNvlink *);
     NV_STATUS (*__knvlinkEnableLinksPostTopology__)(struct OBJGPU *, struct KernelNvlink *, NvU32);
     NV_STATUS (*__knvlinkOverrideConfig__)(struct OBJGPU *, struct KernelNvlink *, NvU32);
@@ -436,12 +444,14 @@ struct KernelNvlink_PRIVATE {
     NvBool bEnableSafeModeAtLoad;
     NvBool bEnableAli;
     NvBool bFloorSwept;
+    NvU32 numPortEvents;
     NvBool bLinkTrainingDebugSpew;
     NvBool bDisableL2Mode;
     NvU32 nvlinkLinkSpeed;
     NvU32 errorRecoveries[18];
     NvBool bNvswitchProxy;
     NvU64 fabricBaseAddr;
+    NvU64 fabricEgmBaseAddr;
 };
 
 #ifndef __NVOC_CLASS_KernelNvlink_TYPEDEF__
@@ -515,10 +525,16 @@ NV_STATUS __nvoc_objCreate_KernelNvlink(KernelNvlink**, Dynamic*, NvU32);
 #define knvlinkSetUniqueFabricBaseAddress_HAL(pGpu, pKernelNvlink, arg0) knvlinkSetUniqueFabricBaseAddress_DISPATCH(pGpu, pKernelNvlink, arg0)
 #define knvlinkClearUniqueFabricBaseAddress(pGpu, pKernelNvlink) knvlinkClearUniqueFabricBaseAddress_DISPATCH(pGpu, pKernelNvlink)
 #define knvlinkClearUniqueFabricBaseAddress_HAL(pGpu, pKernelNvlink) knvlinkClearUniqueFabricBaseAddress_DISPATCH(pGpu, pKernelNvlink)
+#define knvlinkSetUniqueFabricEgmBaseAddress(pGpu, pKernelNvlink, arg0) knvlinkSetUniqueFabricEgmBaseAddress_DISPATCH(pGpu, pKernelNvlink, arg0)
+#define knvlinkSetUniqueFabricEgmBaseAddress_HAL(pGpu, pKernelNvlink, arg0) knvlinkSetUniqueFabricEgmBaseAddress_DISPATCH(pGpu, pKernelNvlink, arg0)
+#define knvlinkClearUniqueFabricEgmBaseAddress(pGpu, pKernelNvlink) knvlinkClearUniqueFabricEgmBaseAddress_DISPATCH(pGpu, pKernelNvlink)
+#define knvlinkClearUniqueFabricEgmBaseAddress_HAL(pGpu, pKernelNvlink) knvlinkClearUniqueFabricEgmBaseAddress_DISPATCH(pGpu, pKernelNvlink)
 #define knvlinkHandleFaultUpInterrupt(pGpu, pKernelNvlink, arg0) knvlinkHandleFaultUpInterrupt_DISPATCH(pGpu, pKernelNvlink, arg0)
 #define knvlinkHandleFaultUpInterrupt_HAL(pGpu, pKernelNvlink, arg0) knvlinkHandleFaultUpInterrupt_DISPATCH(pGpu, pKernelNvlink, arg0)
 #define knvlinkValidateFabricBaseAddress(pGpu, pKernelNvlink, arg0) knvlinkValidateFabricBaseAddress_DISPATCH(pGpu, pKernelNvlink, arg0)
 #define knvlinkValidateFabricBaseAddress_HAL(pGpu, pKernelNvlink, arg0) knvlinkValidateFabricBaseAddress_DISPATCH(pGpu, pKernelNvlink, arg0)
+#define knvlinkValidateFabricEgmBaseAddress(pGpu, pKernelNvlink, arg0) knvlinkValidateFabricEgmBaseAddress_DISPATCH(pGpu, pKernelNvlink, arg0)
+#define knvlinkValidateFabricEgmBaseAddress_HAL(pGpu, pKernelNvlink, arg0) knvlinkValidateFabricEgmBaseAddress_DISPATCH(pGpu, pKernelNvlink, arg0)
 #define knvlinkGetConnectedLinksMask(pGpu, pKernelNvlink) knvlinkGetConnectedLinksMask_DISPATCH(pGpu, pKernelNvlink)
 #define knvlinkGetConnectedLinksMask_HAL(pGpu, pKernelNvlink) knvlinkGetConnectedLinksMask_DISPATCH(pGpu, pKernelNvlink)
 #define knvlinkEnableLinksPostTopology(pGpu, pKernelNvlink, arg0) knvlinkEnableLinksPostTopology_DISPATCH(pGpu, pKernelNvlink, arg0)
@@ -790,6 +806,20 @@ static inline void knvlinkSetDegradedMode(struct OBJGPU *pGpu, struct KernelNvli
 #endif //__nvoc_kernel_nvlink_h_disabled
 
 #define knvlinkSetDegradedMode_HAL(pGpu, pKernelNvlink, arg0) knvlinkSetDegradedMode(pGpu, pKernelNvlink, arg0)
+
+NvBool knvlinkGetDegradedMode_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
+
+
+#ifdef __nvoc_kernel_nvlink_h_disabled
+static inline NvBool knvlinkGetDegradedMode(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
+    NV_ASSERT_FAILED_PRECOMP("KernelNvlink was disabled!");
+    return NV_FALSE;
+}
+#else //__nvoc_kernel_nvlink_h_disabled
+#define knvlinkGetDegradedMode(pGpu, pKernelNvlink) knvlinkGetDegradedMode_IMPL(pGpu, pKernelNvlink)
+#endif //__nvoc_kernel_nvlink_h_disabled
+
+#define knvlinkGetDegradedMode_HAL(pGpu, pKernelNvlink) knvlinkGetDegradedMode(pGpu, pKernelNvlink)
 
 NV_STATUS knvlinkCoreRemoveLink_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 arg0);
 
@@ -1366,6 +1396,23 @@ static inline NvU64 knvlinkGetUniqueFabricBaseAddress(struct OBJGPU *pGpu, struc
 
 #define knvlinkGetUniqueFabricBaseAddress_HAL(pGpu, pKernelNvlink) knvlinkGetUniqueFabricBaseAddress(pGpu, pKernelNvlink)
 
+static inline NvU64 knvlinkGetUniqueFabricEgmBaseAddress_4de472(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
+    struct KernelNvlink_PRIVATE *pKernelNvlink_PRIVATE = (struct KernelNvlink_PRIVATE *)pKernelNvlink;
+    return pKernelNvlink_PRIVATE->fabricEgmBaseAddr;
+}
+
+
+#ifdef __nvoc_kernel_nvlink_h_disabled
+static inline NvU64 knvlinkGetUniqueFabricEgmBaseAddress(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
+    NV_ASSERT_FAILED_PRECOMP("KernelNvlink was disabled!");
+    return 0;
+}
+#else //__nvoc_kernel_nvlink_h_disabled
+#define knvlinkGetUniqueFabricEgmBaseAddress(pGpu, pKernelNvlink) knvlinkGetUniqueFabricEgmBaseAddress_4de472(pGpu, pKernelNvlink)
+#endif //__nvoc_kernel_nvlink_h_disabled
+
+#define knvlinkGetUniqueFabricEgmBaseAddress_HAL(pGpu, pKernelNvlink) knvlinkGetUniqueFabricEgmBaseAddress(pGpu, pKernelNvlink)
+
 NV_STATUS knvlinkStatePostLoadHal_GV100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
 
 
@@ -1499,6 +1546,26 @@ static inline void knvlinkClearUniqueFabricBaseAddress_DISPATCH(struct OBJGPU *p
     pKernelNvlink->__knvlinkClearUniqueFabricBaseAddress__(pGpu, pKernelNvlink);
 }
 
+NV_STATUS knvlinkSetUniqueFabricEgmBaseAddress_GH100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU64 arg0);
+
+static inline NV_STATUS knvlinkSetUniqueFabricEgmBaseAddress_46f6a7(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU64 arg0) {
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+static inline NV_STATUS knvlinkSetUniqueFabricEgmBaseAddress_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU64 arg0) {
+    return pKernelNvlink->__knvlinkSetUniqueFabricEgmBaseAddress__(pGpu, pKernelNvlink, arg0);
+}
+
+static inline void knvlinkClearUniqueFabricEgmBaseAddress_b3696a(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
+    return;
+}
+
+void knvlinkClearUniqueFabricEgmBaseAddress_GH100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
+
+static inline void knvlinkClearUniqueFabricEgmBaseAddress_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
+    pKernelNvlink->__knvlinkClearUniqueFabricEgmBaseAddress__(pGpu, pKernelNvlink);
+}
+
 NV_STATUS knvlinkHandleFaultUpInterrupt_GH100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 arg0);
 
 static inline NV_STATUS knvlinkHandleFaultUpInterrupt_46f6a7(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 arg0) {
@@ -1519,6 +1586,16 @@ static inline NV_STATUS knvlinkValidateFabricBaseAddress_46f6a7(struct OBJGPU *p
 
 static inline NV_STATUS knvlinkValidateFabricBaseAddress_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU64 arg0) {
     return pKernelNvlink->__knvlinkValidateFabricBaseAddress__(pGpu, pKernelNvlink, arg0);
+}
+
+NV_STATUS knvlinkValidateFabricEgmBaseAddress_GH100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU64 arg0);
+
+static inline NV_STATUS knvlinkValidateFabricEgmBaseAddress_46f6a7(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU64 arg0) {
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+static inline NV_STATUS knvlinkValidateFabricEgmBaseAddress_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU64 arg0) {
+    return pKernelNvlink->__knvlinkValidateFabricEgmBaseAddress__(pGpu, pKernelNvlink, arg0);
 }
 
 static inline NvU32 knvlinkGetConnectedLinksMask_15a734(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {

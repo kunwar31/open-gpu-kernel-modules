@@ -310,13 +310,17 @@ _kgspCompleteRpcHistoryEntry
     NvU32 historyIndex;
     NvU32 historyEntry;
 
+    // Complete the current entry (it should be active)
+    // TODO: assert that ts_end == 0 here when continuation record timestamps are fixed
+    NV_ASSERT_OR_RETURN_VOID(pHistory[current].ts_start != 0);
+
     pHistory[current].ts_end = osGetTimestamp();
 
     //
     // Complete any previous entries that aren't marked complete yet, using the same timestamp
     // (we may not have explicitly waited for them)
     //
-    for (historyIndex = 0; historyIndex < RPC_HISTORY_DEPTH; historyIndex++)
+    for (historyIndex = 1; historyIndex < RPC_HISTORY_DEPTH; historyIndex++)
     {
         historyEntry = (current + RPC_HISTORY_DEPTH - historyIndex) % RPC_HISTORY_DEPTH;
         if (pHistory[historyEntry].ts_start != 0 &&
@@ -600,6 +604,81 @@ _kgspRpcRCTriggered
         rpc_params->exceptType,
         rpc_params->scope,
         rpc_params->partitionAttributionId);
+}
+
+/*!
+ * This function is called on critical FW crash to RC and notify an error code to
+ * all user mode channels, allowing the user mode apps to fail deterministically.
+ *
+ * @param[in] pGpu        GPU object pointer
+ * @param[in] pKernelGsp  KernelGsp object pointer
+ * @param[in] exceptType  Error code to send to the RC notifiers
+ *
+ */
+void
+kgspRcAndNotifyAllUserChannels
+(
+    OBJGPU    *pGpu,
+    KernelGsp *pKernelGsp,
+    NvU32      exceptType
+)
+{
+    KernelRc         *pKernelRc = GPU_GET_KERNEL_RC(pGpu);
+    KernelChannel    *pKernelChannel;
+    KernelFifo       *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
+    CHANNEL_ITERATOR  chanIt;
+    RMTIMEOUT         timeout;
+
+    NV_PRINTF(LEVEL_ERROR, "RC all user channels for critical error %d.\n", exceptType);
+
+    // Pass 1: halt all user channels.
+    kfifoGetChannelIterator(pGpu, pKernelFifo, &chanIt, INVALID_RUNLIST_ID);
+    while (kfifoGetNextKernelChannel(pGpu, pKernelFifo, &chanIt, &pKernelChannel) == NV_OK)
+    {
+        //
+        // Kernel (uvm) channels are skipped to workaround nvbug 4503046, where
+        // uvm attributes all errors as global and fails operations on all GPUs,
+        // in addition to the current failing GPU.
+        //
+        if (kchannelCheckIsKernel(pKernelChannel))
+        {
+            continue;
+        }
+
+        kfifoStartChannelHalt(pGpu, pKernelFifo, pKernelChannel);
+    }
+
+    //
+    // Pass 2: Wait for the halts to complete, and RC notify the user channels.
+    // The channel halts require a preemption, which may not be able to complete
+    // since the GSP is no longer servicing interrupts. Wait for up to the
+    // default GPU timeout value for the preemptions to complete.
+    //
+    gpuSetTimeout(pGpu, GPU_TIMEOUT_DEFAULT, &timeout, 0);
+    kfifoGetChannelIterator(pGpu, pKernelFifo, &chanIt, INVALID_RUNLIST_ID);
+    while (kfifoGetNextKernelChannel(pGpu, pKernelFifo, &chanIt, &pKernelChannel) == NV_OK)
+    {
+        // Skip kernel (uvm) channels as only user channel halts are initiated above.
+        if (kchannelCheckIsKernel(pKernelChannel))
+        {
+            continue;
+        }
+
+        kfifoCompleteChannelHalt(pGpu, pKernelFifo, pKernelChannel, &timeout);
+
+        NV_ASSERT_OK(krcErrorSetNotifier(pGpu, pKernelRc,
+                                         pKernelChannel,
+                                         exceptType,
+                                         kchannelGetEngineType(pKernelChannel),
+                                         RC_NOTIFIER_SCOPE_CHANNEL));
+
+        NV_ASSERT_OK(krcErrorSendEventNotifications_HAL(pGpu, pKernelRc,
+            pKernelChannel,
+            kchannelGetEngineType(pKernelChannel),
+            exceptType,
+            RC_NOTIFIER_SCOPE_CHANNEL,
+            0));
+    }
 }
 
 /*!
@@ -1586,13 +1665,13 @@ _tsDiffToDuration
     {
         duration /= 1000;
         *pDurationUnitsChar = 'm';
-    }
 
-    // 9999ms then 10s
-    if (duration >= 10000)
-    {
-        duration /= 1000;
-        *pDurationUnitsChar = ' '; // so caller can always just append 's'
+        // 9999ms then 10s
+        if (duration >= 10000)
+        {
+            duration /= 1000;
+            *pDurationUnitsChar = ' '; // so caller can always just append 's'
+        }
     }
 
     return duration;
@@ -1755,7 +1834,7 @@ _kgspLogXid119
     duration = _tsDiffToDuration(ts_end - pHistoryEntry->ts_start, &durationUnitsChar);
 
     NV_ERROR_LOG(pGpu, GSP_RPC_TIMEOUT,
-                 "Timeout after %llus of waiting for RPC response from GPU%d GSP! Expected function %d (%s) (0x%x 0x%x).",
+                 "Timeout after %llus of waiting for RPC response from GPU%d GSP! Expected function %d (%s) (0x%llx 0x%llx).",
                  (durationUnitsChar == 'm' ? duration / 1000 : duration),
                  gpuGetInstance(pGpu),
                  expectedFunc,
@@ -1766,12 +1845,37 @@ _kgspLogXid119
     if (pRpc->timeoutCount == 1)
     {
         kgspLogRpcDebugInfo(pGpu, pRpc, GSP_RPC_TIMEOUT, NV_TRUE/*bPollingForRpcResponse*/);
-
         osAssertFailed();
 
         NV_PRINTF(LEVEL_ERROR,
                   "********************************************************************************\n");
     }
+}
+
+static void
+_kgspLogRpcSanityCheckFailure
+(
+    OBJGPU *pGpu,
+    OBJRPC *pRpc,
+    NvU32 rpcStatus,
+    NvU32 expectedFunc
+)
+{
+    RpcHistoryEntry *pHistoryEntry = &pRpc->rpcHistory[pRpc->rpcHistoryCurrent];
+
+    NV_ASSERT(expectedFunc == pHistoryEntry->function);
+
+    NV_PRINTF(LEVEL_ERROR,
+              "GPU%d sanity check failed 0x%x waiting for RPC response from GSP. Expected function %d (%s) (0x%llx 0x%llx).\n",
+              gpuGetInstance(pGpu),
+              rpcStatus,
+              expectedFunc,
+              _getRpcName(expectedFunc),
+              pHistoryEntry->data[0],
+              pHistoryEntry->data[1]);
+
+    kgspLogRpcDebugInfo(pGpu, pRpc, GSP_RPC_TIMEOUT, NV_TRUE/*bPollingForRpcResponse*/);
+    osAssertFailed();
 }
 
 static void
@@ -1911,7 +2015,16 @@ _kgspRpcRecvPoll
                 goto done;
         }
 
-        NV_CHECK_OK_OR_GOTO(rpcStatus, LEVEL_SILENT, _kgspRpcSanityCheck(pGpu, pKernelGsp, pRpc), done);
+        rpcStatus = _kgspRpcSanityCheck(pGpu, pKernelGsp, pRpc);
+        if (rpcStatus != NV_OK)
+        {
+            if (!pRpc->bQuietPrints)
+            {
+                _kgspLogRpcSanityCheckFailure(pGpu, pRpc, rpcStatus, expectedFunc);
+                pRpc->bQuietPrints = NV_TRUE;
+            }
+            goto done;
+        }
 
         if (timeoutStatus == NV_ERR_TIMEOUT)
         {
@@ -2275,6 +2388,31 @@ error_cleanup:
         _kgspFreeLibosVgpuPartitionLoggingStructures(pGpu, pKernelGsp, gfid);
 
     return nvStatus;
+}
+
+/*!
+ * Preserve vGPU Partition log buffers between VM reboots
+ */
+NV_STATUS
+kgspPreserveVgpuPartitionLogging_IMPL
+(
+    OBJGPU *pGpu,
+    KernelGsp *pKernelGsp,
+    NvU32 gfid
+)
+{
+    if ((gfid == 0) || (gfid > MAX_PARTITIONS_WITH_GFID))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    // Make sure this this NvLog buffer is pushed
+    kgspDumpGspLogsUnlocked(pKernelGsp, NV_FALSE);
+
+    // Preserve any captured vGPU Partition logs
+    libosPreserveLogs(&pKernelGsp->logDecodeVgpuPartition[gfid - 1]);
+
+    return NV_OK;
 }
 
 void kgspNvlogFlushCb(void *pKernelGsp)
@@ -3336,7 +3474,9 @@ kgspDumpGspLogsUnlocked_IMPL
     NvBool bSyncNvLog
 )
 {
-    if (pKernelGsp->bInInit || pKernelGsp->pLogElf || bSyncNvLog)
+    if (pKernelGsp->bInInit || pKernelGsp->pLogElf || bSyncNvLog
+      || pKernelGsp->bHasVgpuLogs
+    )
     {
         libosExtractLogs(&pKernelGsp->logDecode, bSyncNvLog);
 
@@ -3366,7 +3506,9 @@ kgspDumpGspLogs_IMPL
     NvBool bSyncNvLog
 )
 {
-    if (pKernelGsp->bInInit || pKernelGsp->pLogElf || bSyncNvLog)
+    if (pKernelGsp->bInInit || pKernelGsp->pLogElf || bSyncNvLog
+      || pKernelGsp->bHasVgpuLogs
+    )
     {
         if (pKernelGsp->pNvlogFlushMtx != NULL)
             portSyncMutexAcquire(pKernelGsp->pNvlogFlushMtx);

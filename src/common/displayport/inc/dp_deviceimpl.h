@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -44,6 +44,7 @@ namespace DisplayPort
     #define HDCP_BCAPS_DDC_EN_BIT 0x80
     #define HDCP_BCAPS_DP_EN_BIT  0x01
     #define HDCP_I2C_CLIENT_ADDR  0x74
+    #define DSC_CAPS_SIZE         16
 
     struct GroupImpl;
     struct ConnectorImpl;
@@ -199,8 +200,9 @@ namespace DisplayPort
         TriState bAsyncSDPCapable;
         bool bMSAOverMSTCapable;
         bool bDscPassThroughColorFormatWar;
+        bool bSkipFakeDeviceDpcdAccess;
 
-        DeviceImpl(DPCDHAL * hal, ConnectorImpl * connector, DeviceImpl * parent);
+        DeviceImpl(DPCDHAL * hal, ConnectorImpl * connector, DeviceImpl * parent, bool bSkipFakeDeviceDpcdAccess);
         ~DeviceImpl();
 
         virtual bool isCableOk();
@@ -420,6 +422,7 @@ namespace DisplayPort
         virtual void    markDeviceForDeletion() {bisMarkedForDeletion = true;};
         virtual bool    isMarkedForDeletion() {return bisMarkedForDeletion;};
         virtual bool    getRawDscCaps(NvU8 *buffer, NvU32 bufferSize);
+        virtual bool    setRawDscCaps(NvU8 *buffer, NvU32 bufferSize);
 
         virtual AuxBus::status dscCrcControl(NvBool bEnable, gpuDscCrc *dataGpu, sinkDscCrc *dataSink);
 

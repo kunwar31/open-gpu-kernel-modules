@@ -1416,6 +1416,42 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_VFIO_REGISTER_EMULATED_IOMMU_DEV_PRESENT" "" "functions"
         ;;
 
+        bus_type_has_iommu_ops)
+            #
+            # Determine if 'bus_type' structure has a 'iommu_ops' field.
+            #
+            # This field was removed by commit 17de3f5fdd35 (iommu: Retire bus ops)
+            # in v6.8
+            #
+            CODE="
+            #include <linux/device.h>
+
+            int conftest_bus_type_has_iommu_ops(void) {
+                return offsetof(struct bus_type, iommu_ops);
+            }"
+
+            compile_check_conftest "$CODE" "NV_BUS_TYPE_HAS_IOMMU_OPS" "" "types"
+        ;;
+
+        eventfd_signal_has_counter_arg)
+            #
+            # Determine if eventfd_signal() function has an additional 'counter' argument.
+            #
+            # This argument was removed by commit 3652117f8548 (eventfd: simplify
+            # eventfd_signal()) in v6.8
+            #
+            CODE="
+            #include <linux/eventfd.h>
+
+            void conftest_eventfd_signal_has_counter_arg(void) {
+                struct eventfd_ctx *ctx;
+
+                eventfd_signal(ctx, 1);
+            }"
+
+            compile_check_conftest "$CODE" "NV_EVENTFD_SIGNAL_HAS_COUNTER_ARG" "" "types"
+        ;;
+
         drm_available)
             # Determine if the DRM subsystem is usable
             CODE="
@@ -5066,6 +5102,42 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_CC_PLATFORM_PRESENT" "" "functions"
         ;;
 
+        cc_attr_guest_sev_snp)
+            #
+            # Determine if 'CC_ATTR_GUEST_SEV_SNP' is present.
+            #
+            # Added by commit aa5a461171f9 ("x86/mm: Extend cc_attr to
+            # include AMD SEV-SNP") in v5.19.
+            #
+            CODE="
+            #if defined(NV_LINUX_CC_PLATFORM_H_PRESENT)
+            #include <linux/cc_platform.h>
+            #endif
+
+            enum cc_attr cc_attributes = CC_ATTR_GUEST_SEV_SNP;
+            "
+
+            compile_check_conftest "$CODE" "NV_CC_ATTR_SEV_SNP" "" "types"
+        ;;
+
+        hv_get_isolation_type)
+            #
+            # Determine if 'hv_get_isolation_type()' is present.
+            # Added by commit faff44069ff5 ("x86/hyperv: Add Write/Read MSR
+            # registers via ghcb page") in v5.16.
+            #
+            CODE="
+            #if defined(NV_ASM_MSHYPERV_H_PRESENT)
+            #include <asm/mshyperv.h>
+            #endif
+            void conftest_hv_get_isolation_type(void) {
+                int i;
+                hv_get_isolation_type(i);
+            }"
+
+            compile_check_conftest "$CODE" "NV_HV_GET_ISOLATION_TYPE" "" "functions"
+        ;;
+
         drm_prime_pages_to_sg_has_drm_device_arg)
             #
             # Determine if drm_prime_pages_to_sg() has 'dev' argument.
@@ -5216,25 +5288,23 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_PCI_CLASS_MULTIMEDIA_HD_AUDIO_PRESENT" "" "generic"
         ;;
 
-        unsafe_follow_pfn)
+        follow_pfn)
             #
-            # Determine if unsafe_follow_pfn() is present.
+            # Determine if follow_pfn() is present.
             #
-            # unsafe_follow_pfn() was added by commit 69bacee7f9ad
-            # ("mm: Add unsafe_follow_pfn") in v5.13-rc1.
-            #
-            # Note: this commit never made it to the linux kernel, so
-            # unsafe_follow_pfn() never existed.
+            # follow_pfn() was added by commit 3b6748e2dd69
+            # ("mm: introduce follow_pfn()") in v2.6.31-rc1, and removed
+            # by commit 233eb0bf3b94 ("mm: remove follow_pfn")
+            # from linux-next 233eb0bf3b94.
             #
             CODE="
             #include <linux/mm.h>
-            void conftest_unsafe_follow_pfn(void) {
-                unsafe_follow_pfn();
+            void conftest_follow_pfn(void) {
+                follow_pfn();
             }"
 
-            compile_check_conftest "$CODE" "NV_UNSAFE_FOLLOW_PFN_PRESENT" "" "functions"
+            compile_check_conftest "$CODE" "NV_FOLLOW_PFN_PRESENT" "" "functions"
         ;;
-
         drm_plane_atomic_check_has_atomic_state_arg)
             #
             # Determine if drm_plane_helper_funcs::atomic_check takes 'state'

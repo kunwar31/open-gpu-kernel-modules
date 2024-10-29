@@ -1664,8 +1664,8 @@ _nvswitch_reset_and_drain_links_ls10
             continue;
         }
 
-        // Initialize select scratch registers to 0x0
-        device->hal.nvswitch_init_scratch(device);
+        // Reset NV_NPORT_SCRATCH_WARM_PORT_RESET_REQUIRED to 0x0
+        NVSWITCH_LINK_WR32(device, link, NPORT, _NPORT, _SCRATCH_WARM, 0);
 
         //
         // Step 9.0: Launch ALI training to re-initialize and train the links
@@ -3124,6 +3124,13 @@ nvswitch_is_smbpbi_supported_ls10
         return NV_FALSE;
     }
 
+    if (nvswitch_is_tnvl_mode_enabled(device))
+    {
+        NVSWITCH_PRINT(device, INFO,
+            "SMBPBI is not supported when TNVL mode is enabled\n");
+        return NV_FALSE; 
+    }
+
     status = _nvswitch_get_bios_version(device, &version);
     if (status != NVL_SUCCESS)
     {
@@ -4400,7 +4407,14 @@ nvswitch_eng_wr_ls10
         return;
     }
 
-    nvswitch_reg_write_32(device, base_addr + offset,  data);
+    if (nvswitch_is_tnvl_mode_enabled(device))
+    {
+        nvswitch_tnvl_reg_wr_32_ls10(device, eng_id, eng_bcast, eng_instance, base_addr, offset,  data);
+    }
+    else
+    {
+        nvswitch_reg_write_32(device, base_addr + offset,  data);
+    }
 
 #if defined(DEVELOP) || defined(DEBUG) || defined(NV_MODS)
     {

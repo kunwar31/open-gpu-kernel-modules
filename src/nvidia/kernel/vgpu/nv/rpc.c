@@ -515,9 +515,6 @@ static NV_STATUS _setupGspSharedMemory(OBJGPU *pGpu, OBJVGPU *pVGpu)
     KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
     NvU32 memFlags = 0;
 
-    if (kbusIsPhysicalBar2InitPagetableEnabled(pKernelBus))
-        memFlags = MEMDESC_FLAGS_CPU_ONLY;
-
     if (IsGH100orBetter(pGpu) && (!kbusIsBar2Initialized(pKernelBus)))
         addressSpace = ADDR_SYSMEM;
 
@@ -541,6 +538,84 @@ static void _teardownGspSharedMemory(OBJGPU *pGpu, OBJVGPU *pVGpu)
     _freeSharedMemory(pGpu, pVGpu);
 }
 
+static NvU64 vgpuGspMakeBufferAddress(VGPU_MEM_INFO *pMemInfo, NvU64 gpfn);
+
+static NV_STATUS _setupGspDebugBuff(OBJGPU *pGpu, OBJVGPU *pVGpu)
+{
+    NV_STATUS status;
+
+    if (!RMCFG_FEATURE_PLATFORM_WINDOWS)
+        return NV_OK;
+
+    status = _allocRpcMemDesc(pGpu,
+                              RM_PAGE_SIZE,
+                              NV_MEMORY_CONTIGUOUS,
+                              ADDR_SYSMEM,
+                              0,
+                              &pVGpu->debugBuff.pMemDesc,
+                              (void**)&pVGpu->debugBuff.pMemory,
+                              (void**)&pVGpu->debugBuff.pPriv);
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "RPC: Debug memory setup failed: 0x%x\n", status);
+        return status;
+    }
+
+    pVGpu->debugBuff.pfn = memdescGetPte(pVGpu->debugBuff.pMemDesc, AT_GPU, 0) >> RM_PAGE_SHIFT;
+
+    pVGpu->gspCtrlBuf->v1.debugBuf.addr = vgpuGspMakeBufferAddress(&pVGpu->debugBuff, pVGpu->debugBuff.pfn);
+    pVGpu->gspCtrlBuf->v1.requestedGspCaps = FLD_SET_DRF(_VGPU, _GSP_CAPS, _DEBUG_BUFF_SUPPORTED, _TRUE,
+                                                         pVGpu->gspCtrlBuf->v1.requestedGspCaps);
+
+    return NV_OK;
+}
+
+static void _teardownGspDebugBuff(OBJGPU *pGpu, OBJVGPU *pVGpu)
+{
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+
+    if (!RMCFG_FEATURE_PLATFORM_WINDOWS)
+        return;
+
+    if (!pVGpu->debugBuff.pfn)
+        return;
+
+    NV_ASSERT_OR_RETURN_VOID(pVSI);
+
+    pVSI->vgpuConfig.debugBufferSize = 0;
+    pVSI->vgpuConfig.debugBuffer = NULL;
+
+    pVGpu->debugBuff.pfn = 0;
+
+    _freeRpcMemDesc(pGpu,
+                    &pVGpu->debugBuff.pMemDesc,
+                    (void**)&pVGpu->debugBuff.pMemory,
+                    (void**)&pVGpu->debugBuff.pPriv);
+}
+
+static NV_STATUS _tryEnableGspDebugBuff(OBJGPU *pGpu, OBJVGPU *pVGpu)
+{
+    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
+
+    if (!RMCFG_FEATURE_PLATFORM_WINDOWS)
+        return NV_OK;
+
+    if (!FLD_TEST_DRF(_VGPU, _GSP_CAPS, _DEBUG_BUFF_SUPPORTED, _TRUE,
+        pVGpu->gspResponseBuf->v1.enabledGspCaps)) {
+        _teardownGspDebugBuff(pGpu, pVGpu);
+        return NV_OK;
+    }
+
+    NV_ASSERT_OR_RETURN(pVSI, NV_ERR_GENERIC);
+    NV_ASSERT_OR_RETURN(pVGpu->debugBuff.pMemory, NV_ERR_GENERIC);
+
+    pVSI->vgpuConfig.debugBufferSize = NV_VGPU_DEBUG_BUFF_DRIVER_SIZE;
+    pVSI->vgpuConfig.debugBuffer = NV_PTR_TO_NvP64(pVGpu->debugBuff.pMemory);
+
+    return NV_OK;
+}
+
+
 static NV_STATUS _initSysmemPfnRing(OBJGPU *pGpu)
 {
     NV_STATUS status = NV_OK;
@@ -548,8 +623,11 @@ static NV_STATUS _initSysmemPfnRing(OBJGPU *pGpu)
     KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
     NvU32 memFlags = 0;
 
-    if (kbusIsPhysicalBar2InitPagetableEnabled(pKernelBus))
-        memFlags = MEMDESC_FLAGS_CPU_ONLY;
+    if (!pVGpu->bGspPlugin)
+    {
+        if (kbusIsPhysicalBar2InitPagetableEnabled(pKernelBus))
+            memFlags = MEMDESC_FLAGS_CPU_ONLY;
+    }
 
     status = _allocRpcMemDesc(pGpu,
                               RM_PAGE_SIZE,
@@ -874,11 +952,7 @@ NV_STATUS vgpuReinitializeRpcInfraOnStateLoad(OBJGPU *pGpu)
 static NV_STATUS _setupGspControlBuffer(OBJGPU *pGpu, OBJVGPU *pVGpu)
 {
     NV_STATUS status;
-    KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
     NvU32 memFlags = 0;
-
-    if (kbusIsPhysicalBar2InitPagetableEnabled(pKernelBus))
-        memFlags = MEMDESC_FLAGS_CPU_ONLY;
 
     status = _allocRpcMemDesc(pGpu,
                               RM_PAGE_SIZE,
@@ -918,11 +992,7 @@ static void _teardownGspControlBuffer(OBJGPU *pGpu, OBJVGPU *pVGpu)
 static NV_STATUS _setupGspResponseBuffer(OBJGPU *pGpu, OBJVGPU *pVGpu)
 {
     NV_STATUS status;
-    KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
     NvU32 memFlags = 0;
-
-    if (kbusIsPhysicalBar2InitPagetableEnabled(pKernelBus))
-        memFlags = MEMDESC_FLAGS_CPU_ONLY;
 
     status = _allocRpcMemDesc(pGpu,
                               RM_PAGE_SIZE,
@@ -974,9 +1044,6 @@ static NV_STATUS _setupGspMessageBuffer(OBJGPU *pGpu, OBJVGPU *pVGpu)
     NV_ADDRESS_SPACE addressSpace = ADDR_FBMEM;
     KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
     NvU32 memFlags = 0;
-
-    if(kbusIsPhysicalBar2InitPagetableEnabled(pKernelBus))
-        memFlags = MEMDESC_FLAGS_CPU_ONLY;
 
     if (IsGH100orBetter(pGpu) && (!kbusIsBar2Initialized(pKernelBus)))
         addressSpace = ADDR_SYSMEM;
@@ -1258,6 +1325,9 @@ static NV_STATUS _vgpuGspSetupCommunicationWithPlugin(OBJGPU *pGpu, OBJVGPU *pVG
         rpcVgpuGspWriteScratchRegister_HAL(pRpc, pGpu, addrCtrlBuf);
     }
 
+    NV_PRINTF(LEVEL_INFO, "RPC: Version                  0x%x\n", pVGpu->gspCtrlBuf->v1.version);
+    NV_PRINTF(LEVEL_INFO, "RPC: Requested GSP caps       0x%x\n", pVGpu->gspCtrlBuf->v1.requestedGspCaps);
+    NV_PRINTF(LEVEL_INFO, "RPC: Enabled   GSP caps       0x%x\n", pVGpu->gspResponseBuf->v1.enabledGspCaps);
     NV_PRINTF(LEVEL_INFO, "RPC: Control  buf addr        0x%llx\n", addrCtrlBuf);
     NV_PRINTF(LEVEL_INFO, "RPC: Response buf addr        0x%llx\n", pVGpu->gspCtrlBuf->v1.responseBuf.addr);
     NV_PRINTF(LEVEL_INFO, "RPC: Message  buf addr        0x%llx\n", pVGpu->gspCtrlBuf->v1.msgBuf.addr);
@@ -1266,6 +1336,7 @@ static NV_STATUS _vgpuGspSetupCommunicationWithPlugin(OBJGPU *pGpu, OBJVGPU *pVG
     NV_PRINTF(LEVEL_INFO, "RPC: Shared   buf BAR2 offset 0x%llx\n", pVGpu->gspCtrlBuf->v1.sharedMem.bar2Offset);
     NV_PRINTF(LEVEL_INFO, "RPC: Event    buf addr        0x%llx\n", pVGpu->gspCtrlBuf->v1.eventBuf.addr);
     NV_PRINTF(LEVEL_INFO, "RPC: Event    buf BAR2 offset 0x%llx\n", pVGpu->gspCtrlBuf->v1.eventBuf.bar2Offset);
+    NV_PRINTF(LEVEL_INFO, "RPC: Debug    buf addr        0x%llx\n", pVGpu->gspCtrlBuf->v1.debugBuf.addr);
 
     return status;
 }
@@ -1273,6 +1344,7 @@ static NV_STATUS _vgpuGspSetupCommunicationWithPlugin(OBJGPU *pGpu, OBJVGPU *pVG
 void vgpuGspTeardownBuffers(OBJGPU *pGpu)
 {
     OBJVGPU *pVGpu = GPU_GET_VGPU(pGpu);
+    NvU32 rmStatus = NV_OK;
 
     if (!pVGpu->bGspPlugin)
     {
@@ -1283,6 +1355,17 @@ void vgpuGspTeardownBuffers(OBJGPU *pGpu)
 
     // First teardown with GSP and then teardown the buffers
     _vgpuGspTeardownCommunicationWithPlugin(pGpu, pVGpu);
+
+    if (vgpuSysmemPfnInfo.bSysmemPfnInfoInitialized)
+    {
+        rmStatus = updateSharedBufferInfoInSysmemPfnBitMap(pGpu, pVGpu, NV_FALSE);
+        if (rmStatus != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "RPC: Sysmem PFN bitmap update failed for shared buffer sysmem pages failed: 0x%x\n", rmStatus);
+        }
+    }
+
+    _teardownGspDebugBuff(pGpu, pVGpu);
 
     _teardownGspSharedMemory(pGpu, pVGpu);
 
@@ -1352,6 +1435,13 @@ NV_STATUS vgpuGspSetupBuffers(OBJGPU *pGpu)
         goto fail;
     }
 
+    status = _setupGspDebugBuff(pGpu, pVGpu);
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "RPC: Debug memory setup failed: 0x%x\n", status);
+        goto fail;
+    }
+
     // Update Guest OS Type, before establishing communication with GSP.
     vgpuUpdateGuestOsType(pGpu, pVGpu);
 
@@ -1362,8 +1452,25 @@ NV_STATUS vgpuGspSetupBuffers(OBJGPU *pGpu)
         goto fail;
     }
 
+    if (vgpuSysmemPfnInfo.bSysmemPfnInfoInitialized)
+    {
+        status = updateSharedBufferInfoInSysmemPfnBitMap(pGpu, pVGpu, NV_TRUE);
+        if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "RPC: Sysmem PFN bitmap update failed for shared buffer sysmem pages failed: 0x%x\n", status);
+            goto fail;
+        }
+    }
+
     // Update Guest ECC status based on Host ECC status, after establishing RPC with GSP.
     setGuestEccStatus(pGpu);
+
+    status = _tryEnableGspDebugBuff(pGpu, pVGpu);
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "RPC: Enable debug buffer failed: 0x%x\n", status);
+        goto fail;
+    }
 
     pVGpu->bGspBuffersInitialized = NV_TRUE;
 
@@ -1492,11 +1599,14 @@ NV_STATUS initRpcInfrastructure_VGPU(OBJGPU *pGpu)
         goto fail;
     }
 
-    rmStatus = updateSharedBufferInfoInSysmemPfnBitMap(pGpu, pVGpu, NV_TRUE);
-    if (rmStatus != NV_OK)
+    if (vgpuSysmemPfnInfo.bSysmemPfnInfoInitialized)
     {
-        NV_PRINTF(LEVEL_ERROR, "RPC: Sysmem PFN bitmap update failed for shared buffer sysmem pages failed: 0x%x\n", rmStatus);
-        goto fail;
+        rmStatus = updateSharedBufferInfoInSysmemPfnBitMap(pGpu, pVGpu, NV_TRUE);
+        if (rmStatus != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "RPC: Sysmem PFN bitmap update failed for shared buffer sysmem pages failed: 0x%x\n", rmStatus);
+            goto fail;
+        }
     }
 
     pVGpu->bVncSupported = !!(*(NvU32 *)(pVGpu->shared_memory +
@@ -1541,12 +1651,6 @@ NV_STATUS freeRpcInfrastructure_VGPU(OBJGPU *pGpu)
     if (!pVGpu->bRpcInitialized)
     {
         return NV_ERR_INVALID_STATE;
-    }
-
-    rmStatus = updateSharedBufferInfoInSysmemPfnBitMap(pGpu, pVGpu, NV_FALSE);
-    if (rmStatus != NV_OK)
-    {
-        NV_PRINTF(LEVEL_ERROR, "RPC: Sysmem PFN bitmap update failed for shared buffer sysmem pages failed: 0x%x\n", rmStatus);
     }
 
     if (pVGpu->bGspPlugin)
@@ -8915,6 +9019,9 @@ NV_STATUS rpcGspSetSystemInfo_v17_00
         rpcInfo->isGridBuild = os_is_grid_supported();
 #endif
         rpcInfo->gridBuildCsp = osGetGridCspSupport();
+
+        // Indicate whether the driver supports NV2080_NOTIFIERS_UCODE_RESET event.
+        rpcInfo->bTdrEventSupported = pGpu->getProperty(pGpu, PDB_PROP_GPU_SUPPORTS_TDR_EVENT);
 
         status = _issueRpcAsync(pGpu, pRpc);
     }

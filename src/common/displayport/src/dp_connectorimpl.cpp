@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -166,15 +166,17 @@ void ConnectorImpl::applyRegkeyOverrides(const DP_REGKEY_DATABASE& dpRegkeyDatab
         this->bKeepLinkAliveMST = dpRegkeyDatabase.bOptLinkKeptAliveMst;
         this->bKeepLinkAliveSST = dpRegkeyDatabase.bOptLinkKeptAliveSst;
     }
-    this->bReportDeviceLostBeforeNew    = dpRegkeyDatabase.bReportDeviceLostBeforeNew;
-    this->maxLinkRateFromRegkey         = dpRegkeyDatabase.applyMaxLinkRateOverrides;
-    this->bEnableAudioBeyond48K         = dpRegkeyDatabase.bAudioBeyond48kEnabled;
-    this->bDisableSSC                   = dpRegkeyDatabase.bSscDisabled;
-    this->bEnableFastLT                 = dpRegkeyDatabase.bFastLinkTrainingEnabled;
-    this->bDscMstCapBug3143315          = dpRegkeyDatabase.bDscMstCapBug3143315;
-    this->bPowerDownPhyBeforeD3         = dpRegkeyDatabase.bPowerDownPhyBeforeD3;
-    this->bReassessMaxLink              = dpRegkeyDatabase.bReassessMaxLink;
-    this->bForceDscOnSink               = dpRegkeyDatabase.bForceDscOnSink;
+    this->bReportDeviceLostBeforeNew     = dpRegkeyDatabase.bReportDeviceLostBeforeNew;
+    this->maxLinkRateFromRegkey          = dpRegkeyDatabase.applyMaxLinkRateOverrides;
+    this->bEnableAudioBeyond48K          = dpRegkeyDatabase.bAudioBeyond48kEnabled;
+    this->bDisableSSC                    = dpRegkeyDatabase.bSscDisabled;
+    this->bEnableFastLT                  = dpRegkeyDatabase.bFastLinkTrainingEnabled;
+    this->bDscMstCapBug3143315           = dpRegkeyDatabase.bDscMstCapBug3143315;
+    this->bPowerDownPhyBeforeD3          = dpRegkeyDatabase.bPowerDownPhyBeforeD3;
+    this->bReassessMaxLink               = dpRegkeyDatabase.bReassessMaxLink;
+    this->bForceDscOnSink                = dpRegkeyDatabase.bForceDscOnSink;
+    this->bSkipFakeDeviceDpcdAccess      = dpRegkeyDatabase.bSkipFakeDeviceDpcdAccess;
+    this->bFlushTimeslotWhenDirty        = dpRegkeyDatabase.bFlushTimeslotWhenDirty;
 }
 
 void ConnectorImpl::setPolicyModesetOrderMitigation(bool enabled)
@@ -478,7 +480,7 @@ create:
     }
     else
     {
-        newDev = new DeviceImpl(hal, this, parent);
+        newDev = new DeviceImpl(hal, this, parent, this->bSkipFakeDeviceDpcdAccess);
     }
 
     if (parent)
@@ -3614,7 +3616,7 @@ bool ConnectorImpl::assessPCONLinkCapability(PCONLinkControl *pConControl)
     return true;
 }
 
-bool ConnectorImpl::getOuiSink(unsigned &ouiId, char * modelName, size_t modelNameBufferSize, NvU8 & chipRevision)
+bool ConnectorImpl::getOuiSink(unsigned &ouiId, unsigned char * modelName, size_t modelNameBufferSize, NvU8 & chipRevision)
 {
     if (!previousPlugged || !hal->getOuiSupported())
         return false;
@@ -4632,11 +4634,6 @@ bool ConnectorImpl::trainLinkOptimized(LinkConfiguration lConfig)
                 }
             }
 
-            //
-            // There is no point in fallback here since we are link training  
-            // to loweset link config that can support the mode.
-            //
-            lowestSelected.policy.setSkipFallBack(true);
             bLinkTrainingSuccessful = train(lowestSelected, false);
             //
             // If LT failed, check if skipLT was marked. If so, clear the flag and
@@ -5615,7 +5612,8 @@ void ConnectorImpl::beforeDeleteStream(GroupImpl * group, bool forFlushMode)
         }
     }
 
-    if (linkUseMultistream() && group && group->isHeadAttached() && group->timeslot.count)
+    if (linkUseMultistream() && group && group->isHeadAttached() &&
+        (group->timeslot.count || (this->bFlushTimeslotWhenDirty && group->timeslot.hardwareDirty)))
     {
         // Detach all the panels from payload
         for (Device * d = group->enumDevices(0); d; d = group->enumDevices(d))
@@ -7022,7 +7020,7 @@ void ConnectorImpl::createFakeMuxDevice(const NvU8 *buffer, NvU32 bufferSize)
         return;
     }
 
-    DeviceImpl *newDev = new DeviceImpl(hal, this, NULL);
+    DeviceImpl *newDev = new DeviceImpl(hal, this, NULL, this->bSkipFakeDeviceDpcdAccess);
     if (!newDev)
     {
         return;
